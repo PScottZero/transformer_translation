@@ -1,0 +1,6 @@
+.DS_Store
+__pycache__/
+metrics/
+saved_models/
+sentence_pairs/
+text_processors/
