@@ -18,7 +18,7 @@ def train_all_languages():
   file_names = sorted(os.listdir('sentence_pairs'))
   languages = [file_name.replace('.txt', '') for file_name in file_names if file_name != '.DS_Store']
   
-  for language in languages[languages.index('ukrainian'):]:
+  for language in languages:
     language = language.replace('.txt', '')
     for invert in [False, True]:
       input_language = language if invert else 'english'
