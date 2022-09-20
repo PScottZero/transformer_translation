@@ -4,15 +4,12 @@ from tensorflow.keras import layers
 import gradio as gr
 import pickle
 import stanza
+import json
 import re
 
 
-language_codes = {
-  'arabic': 'ar', 'chinese': 'zh', 'dutch': 'nl', 'english': 'en',
-  'french': 'fr', 'german': 'de', 'greek': 'el', 'hindi': 'hi',
-  'italian': 'it', 'japanese': 'ja', 'korean': 'ko', 'portuguese': 'pt',
-  'romanian': 'ro', 'russian': 'ru', 'spanish': 'es', 'ukrainian': 'uk'
-}
+language_codes = json.loads(open('language_codes.json').read())
+accuracy_and_bleu = json.loads(open('accuracy_and_bleu.json').read())
 
 
 class Translator():
@@ -25,34 +22,65 @@ class Translator():
 
   def change_input_language(self, input_language):
     self.input_language = input_language.lower()
-    self.models = self.load_models()
+    return self.load()
 
   
   def change_target_language(self, target_language):
     self.target_language = target_language.lower()
+    return self.load()
+
+  
+  def swap_languages(self):
+    self.input_language, self.target_language =\
+      self.target_language, self.input_language
+    return self.load()
+
+  
+  def load(self):
     self.models = self.load_models()
+    return self.get_metrics_string(),\
+      self.input_language.capitalize(),\
+      self.target_language.capitalize()
+
+
+  def get_metrics_string(self):
+    model_names = self.get_model_names()
+    accuracies = [accuracy_and_bleu[model_name]['accuracy'] for model_name in model_names]
+    bleus = [accuracy_and_bleu[model_name]['bleu'] for model_name in model_names]
+    metrics = [f'{model_name} - accuracy: {accuracy:.3f}% - bleu: {bleu:.3f}'\
+      for model_name, accuracy, bleu in zip(model_names, accuracies, bleus)]
+    metrics = ' | '.join(metrics)
+    return f'<center><p>{metrics}</p></center>'
 
   
   def load_models(self):
-    return [self.load_model(model_name) for model_name in self.get_model_names(self.input_language, self.target_language)]
+    model_names = self.get_model_names()
+    return [self.load_model(model_name) for model_name in model_names]
 
 
   def load_model(self, model_name):
     target_language = model_name.split('_to_')[1]
-    transformer = tf.saved_model.load(f'./saved_models/{model_name}')
-    text_processors_dir = f'./text_processors/{model_name}'
+    transformer = tf.saved_model.load(f'saved_models/{model_name}')
+    text_processors_dir = f'text_processors/{model_name}'
     stanza.download(language_codes[self.input_language])
-    input_tokenizer = stanza.Pipeline(lang=language_codes[self.input_language], processors='tokenize')
+    input_tokenizer = stanza.Pipeline(lang=language_codes[self.input_language], processors='tokenize', use_gpu=False)
     input_vectorizer = self.load_pickle_as_layer(f'{text_processors_dir}/input_vectorizer.pkl', layers.TextVectorization)
     target_token_from_index = self.load_pickle_as_layer(f'{text_processors_dir}/target_token_from_index.pkl', layers.StringLookup)
     return transformer, input_tokenizer, input_vectorizer, target_token_from_index, target_language
 
 
-  def get_model_names(self, input_language, target_language):
-    if 'english' in (input_language, target_language):
-      model_names = [f'{input_language}_to_{target_language}']
+  def get_model_names(self):
+    if self.input_language == self.target_language:
+      if self.input_language == 'english':
+        model_names = ['english_to_french', 'french_to_english']
+      else:
+        model_names = [f'{self.input_language}_to_english', f'english_to_{self.input_language}']
     else:
-      model_names = [f'{input_language}_to_english', f'english_to_{target_language}']
+      if 'english' in (self.input_language, self.target_language):
+        model_names = [f'{self.input_language}_to_{self.target_language}']
+      else:
+        model_names = [f'{self.input_language}_to_english', f'english_to_{self.target_language}']
+
     return model_names
 
 
@@ -128,9 +156,9 @@ class Translator():
 
 
 
-translator = Translator('english', 'german')
-
+translator = Translator('english', 'chinese')
 available_languages = [language.capitalize() for language in language_codes.keys()]
+
 
 with gr.Blocks() as demo:
   gr.Markdown('''
@@ -142,8 +170,11 @@ with gr.Blocks() as demo:
   
   with gr.Column():
     with gr.Row():
+      input_language_dropdown = gr.Dropdown(label='Input Language', choices=available_languages, value='English')
+      target_language_dropdown = gr.Dropdown(label='Output Language', choices=available_languages, value='Chinese')
+    
+    with gr.Row():
       with gr.Column():
-        input_language_dropdown = gr.Dropdown(label='Input Language', choices=available_languages)
         input_textbox = gr.Textbox(label='Input', lines=5, placeholder=f'Type text here...')
 
         with gr.Row():
@@ -151,13 +182,18 @@ with gr.Blocks() as demo:
           clear_button = gr.Button('Clear')
 
       with gr.Column():
-        target_language_dropdown = gr.Dropdown(label='Output Language', choices=available_languages)
         output_textbox = gr.Textbox(label='Output', lines=5, interactive=False)
+
+        with gr.Row():
+          swap_button = gr.Button('Swap Languages')
+  
+    model_stats = gr.Markdown(translator.get_metrics_string())
   
   submit_button.click(fn=translator.translate, inputs=input_textbox, outputs=output_textbox)
-  clear_button.click(fn=lambda: '', inputs=[], outputs=input_textbox)
+  clear_button.click(fn=lambda: ('', ''), inputs=[], outputs=[input_textbox, output_textbox])
+  swap_button.click(fn=translator.swap_languages, inputs=[], outputs=[model_stats, input_language_dropdown, target_language_dropdown])
 
-  input_language_dropdown.change(fn=translator.change_input_language, inputs=input_language_dropdown, outputs=[])
-  target_language_dropdown.change(fn=translator.change_target_language, inputs=target_language_dropdown, outputs=[])
+  input_language_dropdown.change(fn=translator.change_input_language, inputs=input_language_dropdown, outputs=[model_stats, input_language_dropdown, target_language_dropdown])
+  target_language_dropdown.change(fn=translator.change_target_language, inputs=target_language_dropdown, outputs=[model_stats, input_language_dropdown, target_language_dropdown])
 
 demo.launch()
